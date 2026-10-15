@@ -1,2 +1,2 @@
-fastapi
+mcp>=1.9.0
 uvicorn
