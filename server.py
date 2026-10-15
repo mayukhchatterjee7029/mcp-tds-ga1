@@ -1,39 +1,54 @@
-try:
-    from mcp.server.mcpserver.context import Context
-    from mcp.server.mcpserver.server import MCPServer as FastMCP
-except ModuleNotFoundError:
-    from mcp.server.fastmcp import Context, FastMCP
 import hashlib
+from fastapi import FastAPI, Request, Response
+from fastapi.responses import JSONResponse
 
-# Initialize the FastMCP server
-mcp = FastMCP("ExamServer")
+app = FastAPI()
+EMAIL = "24f3003132@ds.study.iitm.ac.in".strip().lower()
 
-@mcp.tool()
-async def solve_challenge(ctx: Context) -> str:
-    # Access the raw HTTP request headers via the underlying Starlette request object
-    headers = getattr(ctx, "headers", None)
-    if headers is None:
-        request_context = ctx.request_context
-        if request_context is None:
-            raise RuntimeError("Request headers are unavailable outside an active request")
-        headers = request_context.request.headers
-    
-    # Normalize header keys to lowercase for case-insensitive lookup
-    headers_lower = {k.lower(): v for k, v in headers.items()}
-    
-    # Extract the challenge from the header
-    challenge = headers_lower.get("x-exam-challenge", "")
-    
-    # Normalized email as per requirements (trimmed and lowercased)
-    normalized_email = "24f3003132@ds.study.iitm.ac.in"
-    
-    # Compute SHA-256 of "${challenge}:${normalizedEmail}"
-    data = f"{challenge}:{normalized_email}"
-    hash_obj = hashlib.sha256(data.encode('utf-8'))
-    
-    # Return the first 16 lowercase hex characters
-    return hash_obj.hexdigest()[:16]
+TOOL = {
+    "name": "solve_challenge",
+    "description": "Returns the exam challenge response derived from request headers.",
+    "inputSchema": {"type": "object", "properties": {}},
+}
 
-if __name__ == "__main__":
-    # Run the server with streamable-http transport on all network interfaces
-    mcp.run(host="0.0.0.0", port=8000, transport="streamable-http")
+def rpc_result(id_, result):
+    return JSONResponse({"jsonrpc": "2.0", "id": id_, "result": result})
+
+def rpc_error(id_, code, msg):
+    return JSONResponse({"jsonrpc": "2.0", "id": id_, "error": {"code": code, "message": msg}})
+
+@app.get("/mcp")
+async def mcp_get():
+    return Response(status_code=405, headers={"Allow": "POST"})
+
+@app.post("/mcp")
+async def mcp(request: Request):
+    msg = await request.json()
+    method = msg.get("method")
+    id_ = msg.get("id")
+
+    if id_ is None:  # notification
+        return Response(status_code=202)
+
+    if method == "initialize":
+        pv = (msg.get("params") or {}).get("protocolVersion", "2025-03-26")
+        return rpc_result(id_, {
+            "protocolVersion": pv,
+            "capabilities": {"tools": {}},
+            "serverInfo": {"name": "exam-mcp", "version": "1.0.0"},
+        })
+
+    if method == "ping":
+        return rpc_result(id_, {})
+
+    if method == "tools/list":
+        return rpc_result(id_, {"tools": [TOOL]})
+
+    if method == "tools/call":
+        if (msg.get("params") or {}).get("name") != "solve_challenge":
+            return rpc_error(id_, -32602, "Unknown tool")
+        challenge = request.headers.get("x-exam-challenge", "")
+        text = hashlib.sha256(f"{challenge}:{EMAIL}".encode()).hexdigest()[:16]
+        return rpc_result(id_, {"content": [{"type": "text", "text": text}]})
+
+    return rpc_error(id_, -32601, "Method not found")
