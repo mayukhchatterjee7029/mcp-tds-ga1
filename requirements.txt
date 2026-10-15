@@ -1,2 +1,2 @@
-fastapi
-uvicorn[standard]
+mcp>=1.9.0
+uvicorn
